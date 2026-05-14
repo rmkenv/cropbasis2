@@ -48,7 +48,7 @@ WINDOW_DEG   = 0.15
 MAX_WORKERS  = 4
 MIN_CROP_PIX = 10
 CDL_RES_DEG  = 0.00027  # ~30m in degrees at 40°N
-CDL_TIMEOUT  = 20       # seconds — fail fast so we fall through to unmasked
+CDL_TIMEOUT  = 8   # (connect=5s, read=8s) — fail fast; WCS unreachable from Streamlit Cloud
 
 CDL_CLASSES: dict[str, set[int]] = {
     "Corn":     {1, 225, 226, 237, 241},
@@ -279,7 +279,7 @@ def _fetch_cdl_wcs(bounds, year, crop):
         "RESX": str(CDL_RES_DEG), "RESY": str(CDL_RES_DEG), "FORMAT": "GTiff",
     }
     try:
-        resp = requests.get(CDL_WCS_URL, params=params, timeout=CDL_TIMEOUT)
+        resp = requests.get(CDL_WCS_URL, params=params, timeout=(5, CDL_TIMEOUT))
         resp.raise_for_status()
         if b"II" not in resp.content[:4] and b"MM" not in resp.content[:4]:
             log.warning("CDL WCS returned non-TIFF for %d", cdl_year)
