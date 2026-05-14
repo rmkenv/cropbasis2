@@ -1,6 +1,12 @@
 """
 data/futures.py
 CME futures via yfinance and USDA NASS QuickStats cash prices.
+
+NASS data note:
+  "PRICE RECEIVED" weekly series only exists Oct-Dec (post-harvest).
+  "PRICES, CASH, BIDS" is the year-round weekly elevator cash price series.
+  We try PRICES,CASH,BIDS first; fall back to PRICE RECEIVED for off-season.
+  Both walk back up to 2 years if the current year has no data yet.
 """
 
 import datetime as _dt
@@ -18,6 +24,13 @@ log = logging.getLogger(__name__)
 FUTURES_TICKERS = {"Corn": "ZC=F", "Soybeans": "ZS=F", "Wheat": "ZW=F"}
 NASS_BASE_URL   = "https://quickstats.nass.usda.gov/api/api_GET/"
 NASS_COMMODITY  = {"Corn": "CORN", "Soybeans": "SOYBEANS", "Wheat": "WHEAT"}
+
+# NASS stat categories to try in order — cash bids are available year-round;
+# price received is only published post-harvest
+NASS_STAT_CATS = [
+    "PRICES, CASH, BIDS",   # weekly elevator cash price — year-round
+    "PRICE RECEIVED",       # post-harvest only, fallback
+]
 
 
 def fetch_futures_price(crop: str) -> float:
@@ -53,48 +66,43 @@ def fetch_nass_cash_prices(crop: str, api_key: str,
     """
     Fetch weekly cash prices from USDA NASS QuickStats.
 
-    NASS weekly price series typically lags by ~1 crop year — e.g. in May 2026
-    the most recent complete series is 2025. The function walks back up to 2 years
-    to find the most recent year with available data.
+    Tries PRICES,CASH,BIDS (year-round) before PRICE RECEIVED (harvest only).
+    Walks back up to 2 years per category to find available data.
     """
     commodity = NASS_COMMODITY.get(crop, crop.upper())
     base_yr   = year or _dt.datetime.now().year
 
-    data = None
-    used_yr = base_yr
-    for yr in range(base_yr, base_yr - 3, -1):
-        try:
-            resp = requests.get(NASS_BASE_URL, params={
-                "key":              api_key,
-                "commodity_desc":   commodity,
-                "statisticcat_desc":"PRICE RECEIVED",
-                "year":             yr,
-                "freq_desc":        "WEEKLY",
-                "format":           "json",
-            }, timeout=30)
-            resp.raise_for_status()
-            payload = resp.json()
-            if payload.get("data"):
-                log.info("NASS cash prices: using %s %d", commodity, yr)
-                data    = payload
-                used_yr = yr
-                break
-            log.warning("NASS: no weekly price data for %s %d, trying %d",
-                        commodity, yr, yr - 1)
-        except requests.HTTPError as e:
-            log.warning("NASS HTTP error for %s %d: %s — trying prior year", commodity, yr, e)
-        except Exception as e:
-            log.warning("NASS fetch error for %s %d: %s", commodity, yr, e)
-            raise
+    for stat_cat in NASS_STAT_CATS:
+        for yr in range(base_yr, base_yr - 3, -1):
+            try:
+                resp = requests.get(NASS_BASE_URL, params={
+                    "key":              api_key,
+                    "commodity_desc":   commodity,
+                    "statisticcat_desc":stat_cat,
+                    "year":             yr,
+                    "freq_desc":        "WEEKLY",
+                    "format":           "json",
+                }, timeout=30)
+                resp.raise_for_status()
+                payload = resp.json()
+                if payload.get("data"):
+                    log.info("NASS cash prices: %s / %s / %d", commodity, stat_cat, yr)
+                    return _parse_nass(payload)
+                log.debug("NASS no data: %s / %s / %d", commodity, stat_cat, yr)
+            except requests.HTTPError as e:
+                log.warning("NASS HTTP error %s / %s / %d: %s", commodity, stat_cat, yr, e)
+            except Exception as e:
+                raise RuntimeError(f"NASS fetch error: {e}") from e
 
-    if not data:
-        raise RuntimeError(
-            f"NASS returned no weekly price data for {commodity} "
-            f"for years {base_yr} through {base_yr - 2}. "
-            "Check your API key, or upload a cash price CSV instead."
-        )
+    raise RuntimeError(
+        f"NASS returned no weekly cash price data for {commodity}. "
+        f"Tried categories: {NASS_STAT_CATS}, years {base_yr}–{base_yr-2}. "
+        "Upload a cash price CSV instead."
+    )
 
-    df = pd.DataFrame(data["data"])
+
+def _parse_nass(payload: dict) -> pd.DataFrame:
+    df = pd.DataFrame(payload["data"])
     df["week_ending"] = pd.to_datetime(df.get("week_ending", ""), errors="coerce")
     df = df.dropna(subset=["week_ending"])
     df = df.sort_values("week_ending").groupby("state_alpha").last().reset_index()
