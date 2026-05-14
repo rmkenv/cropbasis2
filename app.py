@@ -305,6 +305,18 @@ with st.sidebar:
 
     crop = st.selectbox("Crop", ["Corn", "Soybeans", "Wheat"])
 
+    _harvest = {
+        "Corn":     ("🌽", "Sep – Nov",  "Jun – Aug (vegetative peak)"),
+        "Soybeans": ("🫘", "Sep – Oct",  "Jul – Sep (pod-fill peak)"),
+        "Wheat":    ("🌾", "Jun – Aug",  "Apr – Jun (winter wheat peak)"),
+    }
+    _icon, _h_season, _ndvi_season = _harvest[crop]
+    st.caption(
+        f"{_icon} **Harvest:** {_h_season} · **NDVI signal:** {_ndvi_season}  \n"
+        f"NASS weekly cash prices are only published during/after harvest. "
+        f"Outside that window, upload a cash price CSV."
+    )
+
     end_date = st.date_input("Analysis Date", value=date.today())
 
     ndvi_threshold = st.slider(
